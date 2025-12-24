@@ -3,25 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon-Shot AR | AI Insight</title>
-    
+    <title>Neon-Shot AR | AI Insight Full</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #video-overlay { 
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-            object-fit: cover; transform: scaleX(-1); z-index: -1; 
-        }
+        body { margin: 0; overflow: hidden; background: #000; }
+        #video-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; transform: scaleX(-1); z-index: -1; }
         .neon-text { text-shadow: 0 0 10px #0ff, 0 0 20px #0ff; }
-        .hud-panel { background: rgba(0, 20, 40, 0.6); backdrop-filter: blur(8px); border: 1px solid #0ff; }
+        @keyframes shoot { 0% { transform: scale(1); } 50% { transform: scale(1.5); } 100% { transform: scale(1); } }
+        .firing { animation: shoot 0.1s; color: #ff00ff !important; }
     </style>
 </head>
 <body>
@@ -32,94 +27,116 @@
         const { useState, useEffect, useRef } = React;
 
         const App = () => {
-            const [status, setStatus] = useState('ĐANG KHỞI TẠO AI...');
             const [score, setScore] = useState(0);
+            const [status, setStatus] = useState('ĐANG KHỞI TẠO...');
             const scoreRef = useRef(0);
 
             useEffect(() => {
-                const initGame = async () => {
-                    const videoElement = document.getElementById('video-overlay');
-                    
-                    // 1. Cấu hình MediaPipe Hands
-                    const hands = new Hands({
-                        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
-                    });
+                const video = document.getElementById('video-overlay');
+                const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}` });
+                hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
-                    hands.setOptions({
-                        maxNumHands: 1,
-                        modelComplexity: 1,
-                        minDetectionConfidence: 0.7,
-                        minTrackingConfidence: 0.7
-                    });
+                const scene = new THREE.Scene();
+                const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+                const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                document.body.appendChild(renderer.domElement);
 
-                    // 2. Cấu hình Three.js
-                    const scene = new THREE.Scene();
-                    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-                    renderer.setSize(window.innerWidth, window.innerHeight);
-                    document.body.appendChild(renderer.domElement);
+                // Ánh sáng
+                scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-                    // Tạo tâm ngắm (Crosshair)
-                    const crosshair = new THREE.Mesh(
-                        new THREE.RingGeometry(0.08, 0.1, 32),
-                        new THREE.MeshBasicMaterial({ color: 0x00ffff })
-                    );
-                    crosshair.position.z = -5;
-                    scene.add(crosshair);
+                // Tâm ngắm
+                const crosshair = new THREE.Group();
+                const ring = new THREE.Mesh(new THREE.RingGeometry(0.1, 0.12, 32), new THREE.MeshBasicMaterial({ color: 0x00ffff }));
+                crosshair.add(ring);
+                scene.add(crosshair);
 
-                    // Xử lý khi có kết quả từ AI
-                    hands.onResults((results) => {
-                        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                            setStatus('SẴN SÀNG - GIƠ TAY LÊN!');
-                            const indexTip = results.multiHandLandmarks[0][8]; // Đầu ngón trỏ
-                            
-                            // Di chuyển tâm ngắm theo ngón tay
-                            crosshair.position.x = (0.5 - indexTip.x) * 12;
-                            crosshair.position.y = (0.5 - indexTip.y) * 8;
-                        } else {
-                            setStatus('ĐANG TÌM BÀN TAY...');
-                        }
-                    });
-
-                    // 3. Chạy Camera
-                    const cam = new Camera(videoElement, {
-                        onFrame: async () => {
-                            await hands.send({ image: videoElement });
-                        },
-                        width: 1280,
-                        height: 720
-                    });
-
-                    try {
-                        await cam.start();
-                        setStatus('HÃY CHO PHÉP TRUY CẬP CAMERA');
-                    } catch (e) {
-                        setStatus('LỖI CAMERA: VUI LÒNG BẬT QUYỀN TRUY CẬP');
-                    }
-
-                    const animate = () => {
-                        requestAnimationFrame(animate);
-                        renderer.render(scene, camera);
-                    };
-                    animate();
+                // Quản lý mục tiêu
+                const targets = [];
+                const spawnTarget = () => {
+                    const geometry = new THREE.TorusGeometry(0.3, 0.05, 16, 100);
+                    const material = new THREE.MeshStandardMaterial({ color: 0x00f2ff, emissive: 0x0066ff, emissiveIntensity: 2 });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    const angle = Math.random() * Math.PI * 2;
+                    mesh.position.set(Math.cos(angle) * 8, Math.sin(angle) * 6, -10);
+                    const target = { mesh, velocity: mesh.position.clone().multiplyScalar(-0.005) };
+                    targets.push(target);
+                    scene.add(mesh);
                 };
 
-                initGame();
+                // Tạo 4 mục tiêu ban đầu
+                for(let i=0; i<4; i++) spawnTarget();
+
+                let lastFire = 0;
+                hands.onResults((results) => {
+                    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                        setStatus('SẴN SÀNG - BẮN ĐI!');
+                        const landmarks = results.multiHandLandmarks[0];
+                        const indexTip = landmarks[8];
+                        const thumbTip = landmarks[4];
+                        const indexMcp = landmarks[5];
+
+                        // Di chuyển tâm ngắm
+                        crosshair.position.x = (0.5 - indexTip.x) * 12;
+                        crosshair.position.y = (0.5 - indexTip.y) * 8;
+                        crosshair.position.z = -5;
+
+                        // Nhận diện cử chỉ bắn (Ngón cái gập lại)
+                        const fireDist = Math.hypot(thumbTip.x - indexMcp.x, thumbTip.y - indexMcp.y);
+                        if (fireDist < 0.08 && Date.now() - lastFire > 500) {
+                            checkHit(crosshair.position);
+                            lastFire = Date.now();
+                        }
+                    } else {
+                        setStatus('ĐANG TÌM TAY...');
+                    }
+                });
+
+                const checkHit = (pos) => {
+                    targets.forEach((t, i) => {
+                        const dist = Math.hypot(t.mesh.position.x - pos.x, t.mesh.position.y - pos.y);
+                        if (dist < 0.6) {
+                            scene.remove(t.mesh);
+                            targets.splice(i, 1);
+                            scoreRef.current += 100;
+                            setScore(scoreRef.current);
+                            spawnTarget(); // Tạo con mới thay thế
+                        }
+                    });
+                };
+
+                const cam = new Camera(video, { onFrame: async () => { await hands.send({ image: video }); }, width: 1280, height: 720 });
+                cam.start();
+
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    targets.forEach(t => {
+                        t.mesh.position.add(t.velocity);
+                        t.mesh.rotation.x += 0.02;
+                        if(t.mesh.position.length() < 0.5) { // Reset nếu bay vào giữa
+                            scene.remove(t.mesh);
+                            targets.splice(targets.indexOf(t), 1);
+                            spawnTarget();
+                        }
+                    });
+                    renderer.render(scene, camera);
+                };
+                animate();
             }, []);
 
             return (
-                <div className="fixed inset-0 pointer-events-none text-white p-8">
+                <div className="fixed inset-0 pointer-events-none text-white p-10">
                     <div className="flex justify-between items-start">
-                        <div className="hud-panel p-4 rounded-xl">
-                            <p className="text-xs text-cyan-400 uppercase tracking-widest">Score</p>
-                            <p className="text-4xl font-bold neon-text">{score}</p>
+                        <div className="bg-black/60 p-4 rounded-xl border border-cyan-400">
+                            <p className="text-xs text-cyan-400 uppercase">Score</p>
+                            <p className="text-5xl font-black neon-text">{score}</p>
                         </div>
-                        <div className="bg-cyan-500/20 px-6 py-2 rounded-full border border-cyan-500/50">
-                            <span className="animate-pulse mr-2">●</span> {status}
+                        <div className="bg-cyan-500/20 px-6 py-2 rounded-full border border-cyan-500 shadow-[0_0_15px_rgba(0,255,255,0.5)]">
+                            {status}
                         </div>
                     </div>
-                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 opacity-30 text-xs">
-                        AIINSIGHT.VN | AR GESTURE v2.0
+                    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 text-[10px] opacity-40 uppercase tracking-[0.3em]">
+                        aiinsight.vn | gesture shooting game
                     </div>
                 </div>
             );
